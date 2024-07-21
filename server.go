@@ -242,6 +242,65 @@ func main() {
 		c.JSON(200, gin.H{"messages": messages})
 	})
 
+	// // WebSocket endpoint
+	// router.GET("/ws", func(c *gin.Context) {
+	// 	m.HandleRequest(c.Writer, c.Request)
+	// })
+
+	// m.HandleConnect(func(s *melody.Session) {
+	// 	s.Set("username", "")
+	// })
+
+	// m.HandleMessage(func(s *melody.Session, message []byte) {
+	// 	var msgData Msg
+	// 	err := json.Unmarshal(message, &msgData)
+	// 	if err != nil {
+	// 		fmt.Println(err)
+	// 		return
+	// 	}
+
+	// 	if msgData.Content == "" {
+	// 		s.Set("username", msgData.SenderUsername)
+	// 		return
+	// 	}
+
+	// 	var senderId, receiverId int
+	// 	err = db.QueryRow("SELECT id FROM Users WHERE username=?", msgData.SenderUsername).Scan(&senderId)
+	// 	if err != nil {
+	// 		fmt.Println("Error finding sender:", err)
+	// 		return
+	// 	}
+	// 	err = db.QueryRow("SELECT id FROM Users WHERE username=?", msgData.ReceiverUsername).Scan(&receiverId)
+	// 	if err != nil {
+	// 		fmt.Println("Error finding receiver:", err)
+	// 		return
+	// 	}
+
+	// 	insertStmt, err := db.Prepare("INSERT INTO Messages (body, media, modified, sender_id, receiver_id) VALUES (?, ?, ?, ?, ?)")
+	// 	if err != nil {
+	// 		fmt.Println("Error preparing statement:", err)
+	// 		return
+	// 	}
+	// 	_, err = insertStmt.Exec(msgData.Content, nil, time.Now(), senderId, receiverId)
+	// 	if err != nil {
+	// 		fmt.Println("Error inserting message:", err)
+	// 		return
+	// 	}
+
+	// 	messageResponse := map[string]interface{}{
+	// 		"body":       msgData.Content,
+	// 		"senderId":   senderId,
+	// 		"receiverId": receiverId,
+	// 	}
+
+	// 	msgJSON, _ := json.Marshal(messageResponse)
+
+	// 	m.BroadcastFilter(msgJSON, func(q *melody.Session) bool {
+	// 		username, _ := q.Get("username")
+	// 		return username == msgData.ReceiverUsername || username == msgData.SenderUsername
+	// 	})
+	// })
+
 	// WebSocket endpoint
 	router.GET("/ws", func(c *gin.Context) {
 		m.HandleRequest(c.Writer, c.Request)
@@ -249,17 +308,21 @@ func main() {
 
 	m.HandleConnect(func(s *melody.Session) {
 		s.Set("username", "")
+		fmt.Println("New connection established")
 	})
 
 	m.HandleMessage(func(s *melody.Session, message []byte) {
 		var msgData Msg
 		err := json.Unmarshal(message, &msgData)
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("Error unmarshalling message:", err)
 			return
 		}
 
+		fmt.Println("Received message:", msgData)
+
 		if msgData.Content == "" {
+			fmt.Println("Setting username:", msgData.SenderUsername)
 			s.Set("username", msgData.SenderUsername)
 			return
 		}
@@ -293,11 +356,18 @@ func main() {
 			"receiverId": receiverId,
 		}
 
-		msgJSON, _ := json.Marshal(messageResponse)
+		msgJSON, err := json.Marshal(messageResponse)
+		if err != nil {
+			fmt.Println("Error marshalling response message:", err)
+			return
+		}
+
+		fmt.Println("Broadcasting message:", string(msgJSON))
 
 		m.BroadcastFilter(msgJSON, func(q *melody.Session) bool {
 			username, _ := q.Get("username")
-			return username == msgData.ReceiverUsername
+			fmt.Println("Username: ", username)
+			return username == msgData.ReceiverUsername || username == msgData.SenderUsername
 		})
 	})
 
