@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +18,7 @@ type Msg struct {
 	SenderUsername   string `json:"sender_username"`
 	ReceiverUsername string `json:"receiver_username"`
 	Content          string `json:"content"`
+	MediaBase64      string `json:"media_base64,omitempty"`
 }
 
 type User struct {
@@ -38,6 +40,7 @@ type Message struct {
 func main() {
 	router := gin.Default()
 	m := melody.New()
+	m.Config.MaxMessageSize = 1024 * 1024 * 100
 
 	// Enable CORS
 	router.Use(func(c *gin.Context) {
@@ -260,10 +263,7 @@ func main() {
 			return
 		}
 
-		fmt.Println("Received message:", msgData)
-
-		if msgData.Content == "" {
-			fmt.Println("Setting username:", msgData.SenderUsername)
+		if msgData.Content == "" && msgData.MediaBase64 == "" {
 			s.Set("username", msgData.SenderUsername)
 			return
 		}
@@ -280,12 +280,21 @@ func main() {
 			return
 		}
 
+		var media []byte
+		if msgData.MediaBase64 != "" {
+			media, err = base64.StdEncoding.DecodeString(msgData.MediaBase64)
+			if err != nil {
+				fmt.Println("Error decoding base64 media:", err)
+				return
+			}
+		}
+
 		insertStmt, err := db.Prepare("INSERT INTO Messages (body, media, modified, sender_id, receiver_id) VALUES (?, ?, ?, ?, ?)")
 		if err != nil {
 			fmt.Println("Error preparing statement:", err)
 			return
 		}
-		_, err = insertStmt.Exec(msgData.Content, nil, time.Now(), senderId, receiverId)
+		_, err = insertStmt.Exec(msgData.Content, media, time.Now(), senderId, receiverId)
 		if err != nil {
 			fmt.Println("Error inserting message:", err)
 			return
@@ -295,6 +304,7 @@ func main() {
 			"body":       msgData.Content,
 			"senderId":   senderId,
 			"receiverId": receiverId,
+			"media":      msgData.MediaBase64,
 		}
 
 		msgJSON, err := json.Marshal(messageResponse)
@@ -307,7 +317,6 @@ func main() {
 
 		m.BroadcastFilter(msgJSON, func(q *melody.Session) bool {
 			username, _ := q.Get("username")
-			fmt.Println("Username: ", username)
 			return username == msgData.ReceiverUsername || username == msgData.SenderUsername
 		})
 	})
