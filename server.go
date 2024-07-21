@@ -180,15 +180,42 @@ func main() {
 		c.JSON(200, gin.H{"users": users})
 	})
 
+	router.GET("/userByUsername", func(c *gin.Context) {
+		username := c.Query("username")
+
+		var user User
+		err := db.QueryRow("SELECT id, username FROM Users WHERE username=?", username).Scan(&user.Id, &user.Username)
+		if err == sql.ErrNoRows {
+			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+			return
+		} else if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Database error"})
+			return
+		}
+
+		c.JSON(200, gin.H{"user": user})
+	})
+
 	// Fetch all messages
 	router.GET("/messages", func(c *gin.Context) {
 		senderId := c.Query("senderId")
 		receiverId := c.Query("receiverId")
 
-		var allMessages []Message
-		rows, err := db.Query("SELECT id, body, media, modified, sender_id, receiver_id FROM Messages WHERE sender_id = ? AND receiver_id = ? ORDER BY modified ASC", senderId, receiverId)
+		if senderId == "" || receiverId == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Please provide both senderId and receiverId"})
+			return
+		}
+
+		var messages []Message
+
+		query := `
+		SELECT id, body, media, modified, sender_id, receiver_id
+		FROM Messages
+		WHERE (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
+		ORDER BY modified ASC
+	`
+		rows, err := db.Query(query, senderId, receiverId, receiverId, senderId)
 		if err != nil {
-			fmt.Println("Failed to query messages:", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch messages"})
 			return
 		}
@@ -209,16 +236,10 @@ func main() {
 				continue
 			}
 
-			allMessages = append(allMessages, message)
+			messages = append(messages, message)
 		}
 
-		if err = rows.Err(); err != nil {
-			fmt.Println("Error occurred while iterating over messages:", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error occurred while iterating over messages"})
-			return
-		}
-
-		c.JSON(200, gin.H{"messages": allMessages})
+		c.JSON(200, gin.H{"messages": messages})
 	})
 
 	// WebSocket endpoint
