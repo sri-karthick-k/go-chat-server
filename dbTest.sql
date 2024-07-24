@@ -1,6 +1,6 @@
--- CREATE DATABASE chatDBTest if not exists;
+CREATE DATABASE chatDB;
 
--- USE chatDBTest;
+USE chatDB;
 
 -- Users table to store user information
 CREATE TABLE Users (

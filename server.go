@@ -11,7 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/olahol/melody"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"golang.org/x/crypto/bcrypt"
+)
+
+var (
+	amqpURI  = "amqp://admin:admin@node1:5672/"
+	exchange = "chat_exchange"
 )
 
 type Msg struct {
@@ -42,6 +48,80 @@ func main() {
 	m := melody.New()
 	m.Config.MaxMessageSize = 1024 * 1024 * 100
 
+	conn, err := amqp.Dial(amqpURI)
+	if err != nil {
+		panic("Failed to connect to RabbitMQ")
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		panic("Failed to open a channel")
+	}
+	defer ch.Close()
+
+	// Declare exchange
+	err = ch.ExchangeDeclare(
+		exchange, // name
+		"direct", // type
+		false,    // durable
+		false,    // auto-deleted
+		false,    // internal
+		false,    // no-wait
+		nil,      // arguments
+	)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to declare an exchange: %v", err))
+	}
+
+	// Declare queues
+	textQueue, err := ch.QueueDeclare(
+		"text_messages", // queue name
+		false,           // durable
+		false,           // delete when unused
+		false,           // exclusive
+		false,           // no-wait
+		nil,             // arguments
+	)
+	if err != nil {
+		panic("Failed to declare a queue")
+	}
+
+	mediaQueue, err := ch.QueueDeclare(
+		"media_messages", // queue name
+		false,            // durable
+		false,            // delete when unused
+		false,            // exclusive
+		false,            // no-wait
+		nil,              // arguments
+	)
+	if err != nil {
+		panic("Failed to declare a queue")
+	}
+
+	// Bind queues to the exchange
+	err = ch.QueueBind(
+		textQueue.Name, // queue name
+		"text",         // routing key
+		exchange,       // exchange
+		false,
+		nil,
+	)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to bind text queue: %v", err))
+	}
+
+	err = ch.QueueBind(
+		mediaQueue.Name, // queue name
+		"media",         // routing key
+		exchange,        // exchange
+		false,
+		nil,
+	)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to bind media queue: %v", err))
+	}
+
 	// Enable CORS
 	router.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
@@ -55,15 +135,11 @@ func main() {
 		c.Next()
 	})
 
-	dbURL := "sri:Spartan03@/chatDBTest?charset=utf8"
+	dbURL := "root:password@tcp(lb:3306)/chatDB?charset=utf8"
 	db, err := sql.Open("mysql", dbURL)
 	if err != nil {
 		panic(err)
 	}
-
-	router.GET("/", func(c *gin.Context) {
-		http.ServeFile(c.Writer, c.Request, "./public/index.html")
-	})
 
 	// Registration endpoint
 	router.POST("/register", func(c *gin.Context) {
@@ -266,6 +342,38 @@ func main() {
 		if msgData.Content == "" && msgData.MediaBase64 == "" {
 			s.Set("username", msgData.SenderUsername)
 			return
+		}
+
+		if msgData.MediaBase64 != "" {
+			// Publish to media queue
+			err := ch.Publish(
+				exchange,        // exchange
+				mediaQueue.Name, // routing key
+				false,           // mandatory
+				false,           // immediate
+				amqp.Publishing{
+					ContentType: "text/plain",
+					Body:        message,
+				},
+			)
+			if err != nil {
+				fmt.Println("Failed to publish message to media queue:", err)
+			}
+		} else {
+			// Publish to text queue
+			err := ch.Publish(
+				exchange,       // exchange
+				textQueue.Name, // routing key
+				false,          // mandatory
+				false,          // immediate
+				amqp.Publishing{
+					ContentType: "text/plain",
+					Body:        message,
+				},
+			)
+			if err != nil {
+				fmt.Println("Failed to publish message to text queue:", err)
+			}
 		}
 
 		var senderId, receiverId int

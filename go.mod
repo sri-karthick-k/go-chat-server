@@ -6,6 +6,7 @@ require (
 	github.com/gin-gonic/gin v1.10.0
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/olahol/melody v1.2.1
+	github.com/rabbitmq/amqp091-go v1.10.0
 	golang.org/x/crypto v0.25.0
 )
 
