@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/olahol/melody"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"golang.org/x/crypto/bcrypt"
@@ -41,6 +42,57 @@ type Message struct {
 	Modified   time.Time `json:"modified"`
 	SenderId   int       `json:"sender_id"`
 	ReceiverId int       `json:"receiver_id"`
+}
+
+var jwtKey = []byte("secret_key_hehe")
+
+type Claims struct {
+	UserId   int    `json:"userId"`
+	Username string `json:"username"`
+	jwt.RegisteredClaims
+}
+
+func generateJWT(userId int, username string) (string, error) {
+	expirationTime := time.Now().Add(1 * time.Hour)
+	claims := &Claims{
+		UserId:   userId,
+		Username: username,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(jwtKey)
+	if err != nil {
+		return "", err
+	}
+	return tokenString, nil
+}
+
+func authenticateJWT() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tokenStr, err := c.Cookie("token")
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "No token provided"})
+			c.Abort()
+			return
+		}
+
+		claims := &Claims{}
+		token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
+			return jwtKey, nil
+		})
+		if err != nil || !token.Valid {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
+			c.Abort()
+			return
+		}
+
+		c.Set("userId", claims.UserId)
+		c.Set("username", claims.Username)
+		c.Next()
+	}
 }
 
 func main() {
@@ -124,7 +176,7 @@ func main() {
 
 	// Enable CORS
 	router.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
+		c.Writer.Header().Set("Access-Control-Allow-Origin", "http://localhost:5173")
 		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
 		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Authorization, X-Requested-With")
 		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT")
@@ -135,7 +187,8 @@ func main() {
 		c.Next()
 	})
 
-	dbURL := "root:password@tcp(lb:3306)/chatDB?charset=utf8"
+	// dbURL := "root:password@tcp(lb:3306)/chatDB?charset=utf8"
+	dbURL := "sri:Spartan03@tcp(localhost:3306)/chatDB?charset=utf8"
 	db, err := sql.Open("mysql", dbURL)
 	if err != nil {
 		panic(err)
@@ -171,7 +224,8 @@ func main() {
 			}
 			_, err = insertStmt.Exec(user.Username, user.Email, hashedPassword)
 			if err != nil {
-				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to register user"})
+				fmt.Println(err)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Email already exists"})
 				return
 			}
 			db.QueryRow("SELECT id FROM Users WHERE username=?", user.Username).Scan(&id)
@@ -183,9 +237,24 @@ func main() {
 			return
 		}
 
-		user.Id = id
-		user.Password = string(hashedPassword)
-		c.JSON(200, gin.H{"user": user})
+		tokenString, err := generateJWT(user.Id, user.Username)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate JWT token"})
+			return
+		}
+
+		// Set the JWT token as an HttpOnly cookie
+		c.SetCookie(
+			"token",     // Cookie name
+			tokenString, // Cookie value
+			3600,        // Max age in seconds (1 hour)
+			"/",         // Path
+			"",          // Domain (empty for current domain)
+			true,        // Secure (true if HTTPS)
+			true,        // HttpOnly
+		)
+
+		c.JSON(200, gin.H{"message": "Register successful", "user": User{Id: id, Username: user.Username}})
 	})
 
 	// Login endpoint
@@ -218,12 +287,52 @@ func main() {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid username or password"})
 			return
 		}
+		fmt.Println(user)
+		tokenString, err := generateJWT(id, user.Username)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate JWT token"})
+			return
+		}
 
-		c.JSON(200, gin.H{"user": User{Id: id, Username: user.Username}})
+		// Set the JWT token as an HttpOnly cookie
+		c.SetCookie(
+			"token",     // Cookie name
+			tokenString, // Cookie value
+			3600,        // Max age in seconds (1 hour)
+			"/",         // Path
+			"",          // Domain (empty for current domain)
+			true,        // Secure (true if HTTPS)
+			true,        // HttpOnly
+		)
+
+		fmt.Println(user)
+
+		c.JSON(200, gin.H{"message": "Login successful", "user": User{Id: id, Username: user.Username}})
 	})
 
-	router.GET("/chatUsers", func(c *gin.Context) {
-		userId := c.Query("userId")
+	router.GET("/logout", func(c *gin.Context) {
+		// Set the cookie with an expiration date in the past to effectively delete it
+		http.SetCookie(c.Writer, &http.Cookie{
+			Name:     "token",
+			Value:    "",
+			Expires:  time.Unix(0, 0), // Set the expiration date in the past
+			HttpOnly: true,
+			Path:     "/",
+		})
+
+		// Send a response to indicate the user has been logged out
+		c.JSON(http.StatusOK, gin.H{
+			"message": "Logged out successfully",
+		})
+	})
+
+	router.GET("/chatUsers", authenticateJWT(), func(c *gin.Context) {
+		userId, exists := c.Get("userId")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			return
+		}
+		fmt.Println(userId)
 		var users []User
 
 		if userId == "" {
@@ -259,7 +368,7 @@ func main() {
 		c.JSON(200, gin.H{"users": users})
 	})
 
-	router.GET("/userByUsername", func(c *gin.Context) {
+	router.GET("/userByUsername", authenticateJWT(), func(c *gin.Context) {
 		username := c.Query("username")
 
 		var user User
@@ -276,8 +385,12 @@ func main() {
 	})
 
 	// Fetch all messages
-	router.GET("/messages", func(c *gin.Context) {
-		senderId := c.Query("senderId")
+	router.GET("/messages", authenticateJWT(), func(c *gin.Context) {
+		senderId, exists := c.Get("userId")
+		if !exists {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			return
+		}
 		receiverId := c.Query("receiverId")
 
 		if senderId == "" || receiverId == "" {
@@ -327,7 +440,25 @@ func main() {
 	})
 
 	m.HandleConnect(func(s *melody.Session) {
-		s.Set("username", "")
+		cookie, err := s.Request.Cookie("token")
+		if err != nil {
+			fmt.Println("Error retrieving token cookie:", err)
+			s.Close()
+			return
+		}
+		tokenStr := cookie.Value
+		claims := &Claims{}
+		token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
+			return jwtKey, nil
+		})
+
+		if err != nil || !token.Valid {
+			s.Close()
+			return
+		}
+
+		s.Set("userId", claims.UserId)
+		s.Set("username", claims.Username)
 		fmt.Println("New connection established")
 	})
 
