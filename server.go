@@ -187,8 +187,8 @@ func main() {
 		c.Next()
 	})
 
-	// dbURL := "root:password@tcp(lb:3306)/chatDB?charset=utf8"
-	dbURL := "sri:Spartan03@tcp(localhost:3306)/chatDB?charset=utf8"
+	dbURL := "root:password@tcp(lb:3306)/chatDB?charset=utf8"
+	// dbURL := "sri:Spartan03@tcp(localhost:3306)/chatDB?charset=utf8"
 	db, err := sql.Open("mysql", dbURL)
 	if err != nil {
 		panic(err)
@@ -526,18 +526,20 @@ func main() {
 				fmt.Println("Error decoding base64 media:", err)
 				return
 			}
-			return
 		}
 
-		insertStmt, err := db.Prepare("INSERT INTO Messages (body, media, modified, sender_id, receiver_id) VALUES (?, ?, ?, ?, ?)")
-		if err != nil {
-			fmt.Println("Error preparing statement:", err)
-			return
-		}
-		_, err = insertStmt.Exec(msgData.Content, media, time.Now(), senderId, receiverId)
-		if err != nil {
-			fmt.Println("Error inserting message:", err)
-			return
+		if msgData.MediaBase64 == "" {
+
+			insertStmt, err := db.Prepare("INSERT INTO Messages (body, media, modified, sender_id, receiver_id) VALUES (?, ?, ?, ?, ?)")
+			if err != nil {
+				fmt.Println("Error preparing statement:", err)
+				return
+			}
+			_, err = insertStmt.Exec(msgData.Content, media, time.Now(), senderId, receiverId)
+			if err != nil {
+				fmt.Println("Error inserting message:", err)
+				return
+			}
 		}
 
 		messageResponse := map[string]interface{}{
