@@ -483,7 +483,7 @@ func main() {
 				false,           // mandatory
 				false,           // immediate
 				amqp.Publishing{
-					ContentType: "text/plain",
+					ContentType: "application/json",
 					Body:        message,
 				},
 			)
@@ -526,6 +526,7 @@ func main() {
 				fmt.Println("Error decoding base64 media:", err)
 				return
 			}
+			return
 		}
 
 		insertStmt, err := db.Prepare("INSERT INTO Messages (body, media, modified, sender_id, receiver_id) VALUES (?, ?, ?, ?, ?)")
